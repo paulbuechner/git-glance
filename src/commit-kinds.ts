@@ -66,3 +66,23 @@ export function sizeBucketLabel(key: SizeBucket): string {
   const hi = SIZE_BUCKETS[i]!.max
   return Number.isFinite(hi) ? `${key} (${lo}–${hi})` : `${key} (${lo}+)`
 }
+
+/** Names too generic to merge people by; each address stays its own person. */
+const GENERIC_NAMES = /^(unknown|root|admin|administrator|user|build|jenkins|git|system|ubuntu|vagrant)$/
+
+/**
+ * Identity for grouping authors: the name, normalized so "Doe, Jane" and
+ * "Jane Doe" match, with case, accents and spacing ignored. Generic or empty names
+ * fall back to the email, so unrelated "unknown" committers stay apart.
+ */
+export function personKey(name: string, email: string): string {
+  const m = /^\s*([^,]+?)\s*,\s*(.+?)\s*$/.exec(name)
+  const normal = (m ? `${m[2]} ${m[1]}` : name)
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!normal || GENERIC_NAMES.test(normal)) return `email:${email.toLowerCase()}`
+  return `name:${normal}`
+}

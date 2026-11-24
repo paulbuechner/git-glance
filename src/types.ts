@@ -81,8 +81,40 @@ export type ReportConfig = {
   collections: CollectionInfo[]
   /** Glob patterns (repo-relative) left out of line and file stats. */
   excludePaths: string[]
+  /** Glob patterns that always count, even when excluded or detected as generated. */
+  keepPaths: string[]
+  /** Leave out source files whose header says they are generated (needs `history`). */
+  excludeGenerated: boolean
+  /** Count the deletions of bulk-deletion commits (5,000+ deleted, under a tenth as many added). */
+  countBulkDeletions: boolean
+  /** Emails or names whose commits are left out entirely (bots, tool snapshots). */
+  ignoreAuthors: string[]
   /** Load GitHub data through `gh` when it is installed and logged in. */
   github: boolean
+  /** Load the full history for the Evolution card. */
+  history: boolean
+  /** Absolute path of a CSS file applied after the built-in styles, or null. */
+  theme: string | null
+}
+
+/**
+ * Every author's commits over the whole history, for the dashboard's global range filter.
+ * Rows are compact tuples (no file lists) so years of commits stay small in the page.
+ */
+export type HistoryData = {
+  /** Earliest commit day across all repos, YYYY-MM-DD. Row offsets count days from here. */
+  start: string
+  /** Last day covered (the window end). */
+  end: string
+  /** Lower-cased author emails; rows point into this list. */
+  emails: string[]
+  /** Latest author name seen for each email. */
+  names: string[]
+  /**
+   * One row per commit: [dayOffset, hour (author local), repoIndex, emailIndex, added,
+   * deleted, shortHash, subject]. Line counts skip excludePaths, like the window's.
+   */
+  commits: [number, number, number, number, number, number, string, string][]
 }
 
 export type WindowGrain = 'day' | 'month'
@@ -178,6 +210,10 @@ export type ReportData = {
   github: GithubData | null
   /** Why `github` is null, for a note on the dashboard. */
   githubNote: string | null
+  /** Whole-history commits; null when `history` is off in the config. */
+  history: HistoryData | null
+  /** Every tag up to the window end (the dashboard filters by its own range). */
+  allTags: TagInfo[]
 }
 
 export type PrState = 'OPEN' | 'MERGED' | 'CLOSED'

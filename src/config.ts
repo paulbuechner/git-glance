@@ -28,7 +28,13 @@ type FileConfig = {
   collections?: unknown
   repos?: unknown
   excludePaths?: unknown
+  keepPaths?: unknown
+  excludeGenerated?: unknown
+  countBulkDeletions?: unknown
+  ignoreAuthors?: unknown
   github?: unknown
+  history?: unknown
+  theme?: unknown
 }
 
 /**
@@ -230,6 +236,22 @@ export function parseConfig(raw: FileConfig, configPath: string): ReportConfig {
   if (raw.github !== undefined && typeof raw.github !== 'boolean') {
     throw new Error(`${configPath}: github must be true or false when set`)
   }
+  if (raw.countBulkDeletions !== undefined && typeof raw.countBulkDeletions !== 'boolean') {
+    throw new Error(`${configPath}: countBulkDeletions must be true or false when set`)
+  }
+  if (raw.excludeGenerated !== undefined && typeof raw.excludeGenerated !== 'boolean') {
+    throw new Error(`${configPath}: excludeGenerated must be true or false when set`)
+  }
+  if (raw.history !== undefined && typeof raw.history !== 'boolean') {
+    throw new Error(`${configPath}: history must be true or false when set`)
+  }
+  if (raw.theme !== undefined && raw.theme !== null && !nonEmptyString(raw.theme)) {
+    throw new Error(`${configPath}: theme must be a path to a CSS file when set`)
+  }
+  const theme = nonEmptyString(raw.theme) ? resolveConfigPath(raw.theme.trim()) : null
+  if (theme && !existsSync(theme)) {
+    throw new Error(`${configPath}: theme file not found: ${theme}`)
+  }
   const rawCollections = (raw.collections as unknown[] | undefined) ?? []
   const rawRepos = (raw.repos as unknown[] | undefined) ?? []
   if (rawCollections.length === 0 && rawRepos.length === 0) {
@@ -258,7 +280,13 @@ export function parseConfig(raw: FileConfig, configPath: string): ReportConfig {
     repos,
     collections,
     excludePaths: stringArray(raw.excludePaths, `${configPath}: excludePaths`),
+    keepPaths: stringArray(raw.keepPaths, `${configPath}: keepPaths`),
+    excludeGenerated: raw.excludeGenerated ?? true,
+    countBulkDeletions: raw.countBulkDeletions ?? false,
+    ignoreAuthors: stringArray(raw.ignoreAuthors, `${configPath}: ignoreAuthors`),
     github: raw.github ?? true,
+    history: raw.history ?? true,
+    theme,
   }
 }
 

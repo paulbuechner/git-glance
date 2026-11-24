@@ -3,7 +3,18 @@ import { mkdir } from 'node:fs/promises'
 import { configFlagUsage, loadConfig, projectRoot, stripConfigFlag } from './config.ts'
 import { parseWindowArgs, windowFlagsUsage } from './window-args.ts'
 import { resolveWindow } from './resolve-window.ts'
-import { fetchRepos, loadAllCommits, loadBranches, loadTags } from './git.ts'
+import {
+  authorIgnorer,
+  excluder,
+  fetchRepos,
+  loadAllCommits,
+  loadBranches,
+  loadHistory,
+  loadTags,
+  matcher,
+  withoutGenerated,
+  withoutShared,
+} from './git.ts'
 import { githubStateNote, githubStatus, loadGithub } from './github.ts'
 import { previousWindow } from './window.ts'
 import { aggregate } from './aggregate.ts'
@@ -63,18 +74,51 @@ async function main() {
   const githubNote = githubStateNote(gh.state)
   console.log(gh.login ? `GitHub: gh logged in as ${gh.login}` : (githubNote ?? ''))
 
-  const opts = { stats: true, excludePaths: config.excludePaths }
+  const opts = {
+    stats: true,
+    excludePaths: config.excludePaths,
+    keepPaths: config.keepPaths,
+    countBulkDeletions: config.countBulkDeletions,
+    ignoreAuthors: config.ignoreAuthors,
+  }
+  const rules = {
+    isExcluded: excluder(config.excludePaths),
+    isKept: matcher(config.keepPaths),
+    detectGenerated: config.excludeGenerated,
+    countBulkDeletions: config.countBulkDeletions,
+    isIgnoredAuthor: authorIgnorer(config.ignoreAuthors),
+  }
   const prevWindow = previousWindow(window)
-  const [commits, previousCommits, branches, tags, github] = await Promise.all([
+  if (config.history) {
+    console.log('History: loading every commit (new commits get line stats; the rest come from out/.cache)')
+  }
+  // Tags for the whole history; the markdown keeps the window's, the dashboard filters its own range.
+  const tagsUpToEnd = { ...window, start: '0000-01-01' }
+  const [windowCommits, windowPrevious, branches, allTags, github, loaded] = await Promise.all([
     loadAllCommits(config.repos, window, opts),
     prevWindow ? loadAllCommits(config.repos, prevWindow, opts) : Promise.resolve([]),
     Promise.all(config.repos.map((r) => loadBranches(r, window))).then((b) => b.flat()),
-    Promise.all(config.repos.map((r) => loadTags(r, window))).then((t) => t.flat()),
+    Promise.all(config.repos.map((r) => loadTags(r, tagsUpToEnd))).then((t) => t.flat()),
     gh.login ? loadGithub(config.repos, window, gh.login, config.subjectLogins, config.subjectEmails) : null,
+    config.history
+      ? loadHistory(config.repos, window.end, rules, resolve(projectRoot, 'out', '.cache', 'history'), (m) =>
+          console.log(m),
+        )
+      : null,
   ])
+  // Generated files are detected while loading the history; the window's own file lists drop them too.
+  const generated = loaded?.generated ?? {}
+  const elsewhere = loaded?.elsewhere ?? {}
+  const commits = withoutShared(withoutGenerated(windowCommits, generated), elsewhere)
+  const previousCommits = withoutShared(withoutGenerated(windowPrevious, generated), elsewhere)
+  const history = loaded?.history ?? null
+  const generatedCount = Object.values(generated).reduce((n, paths) => n + paths.length, 0)
+  if (generatedCount > 0) console.log(`History: ${generatedCount} generated files left out (header check)`)
+  const tags = window.label === 'all-time' ? allTags : allTags.filter((t) => t.day >= window.start)
   console.log(
     `Loaded ${commits.length} commits (${previousCommits.length} in previous window), ${branches.length} unmerged branches, ${tags.length} tags`,
   )
+  if (history) console.log(`History: ${history.commits.length} commits since ${history.start}`)
   if (github) {
     console.log(`GitHub: ${github.prs.length} PRs, ${github.runs.length} workflow runs`)
   }
@@ -86,6 +130,8 @@ async function main() {
     tags,
     github,
     githubNote,
+    history,
+    allTags,
   })
   const outDir = resolve(projectRoot, 'out', window.label)
   await mkdir(outDir, { recursive: true })
@@ -93,7 +139,8 @@ async function main() {
   const mdPath = resolve(outDir, 'commit-visibility.md')
   const htmlPath = resolve(outDir, 'commit-visibility.html')
   const indexPath = resolve(outDir, 'index.html')
-  const html = await renderHtml(data, projectRoot)
+  const themeCss = config.theme ? await Bun.file(config.theme).text() : ''
+  const html = await renderHtml(data, projectRoot, themeCss)
 
   await Bun.write(mdPath, renderMarkdown(data))
   await Bun.write(htmlPath, html)

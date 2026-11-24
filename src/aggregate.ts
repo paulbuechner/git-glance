@@ -6,6 +6,7 @@ import type {
   DayMark,
   EmptyWeekday,
   GithubData,
+  HistoryData,
   ReportConfig,
   ReportData,
   RepoSummary,
@@ -14,6 +15,7 @@ import type {
 } from './types.ts'
 import { eachDay, eachMonth, isWeekend, monthKey, todayLocal, weekdayName } from './window.ts'
 import { buildEmptyDayInsight, buildHandoff } from './insights.ts'
+import { personKey } from './commit-kinds.ts'
 
 export function isSubjectEmail(email: string, subjectEmails: string[]): boolean {
   const lower = email.toLowerCase()
@@ -87,6 +89,8 @@ export type AggregateExtras = {
   tags?: TagInfo[]
   github?: GithubData | null
   githubNote?: string | null
+  history?: HistoryData | null
+  allTags?: TagInfo[]
 }
 
 export function aggregate(
@@ -164,22 +168,25 @@ export function aggregate(
 
   repoSummaries.sort((a, b) => b.commits - a.commits)
 
-  const byEmail = new Map<string, { name: string; email: string; commits: Commit[] }>()
+  // One person per normalized name ("Doe, Jane" = "Jane Doe"), across addresses.
+  const byPerson = new Map<string, { name: string; emails: Set<string>; commits: Commit[] }>()
   for (const c of allCommits) {
-    let row = byEmail.get(c.authorEmail)
+    if (isSubjectEmail(c.authorEmail, subjectEmails)) continue
+    const key = personKey(c.authorName, c.authorEmail)
+    let row = byPerson.get(key)
     if (!row) {
-      row = { name: c.authorName, email: c.authorEmail, commits: [] }
-      byEmail.set(c.authorEmail, row)
+      row = { name: c.authorName, emails: new Set(), commits: [] }
+      byPerson.set(key, row)
     }
     row.commits.push(c)
+    row.emails.add(c.authorEmail)
     row.name = c.authorName
   }
 
-  const otherAuthors: AuthorSummary[] = [...byEmail.values()]
-    .filter((a) => !isSubjectEmail(a.email, subjectEmails))
+  const otherAuthors: AuthorSummary[] = [...byPerson.values()]
     .map((a) => ({
       name: a.name,
-      emails: [a.email],
+      emails: [...a.emails].sort(),
       commits: a.commits.length,
       activeDays: [...new Set(a.commits.map((c) => c.day))].sort(),
       repos: [...new Set(a.commits.map((c) => c.repo))].sort(),
@@ -238,6 +245,8 @@ export function aggregate(
     tags: extras.tags ?? [],
     github: extras.github ?? null,
     githubNote: extras.githubNote ?? null,
+    history: extras.history ?? null,
+    allTags: extras.allTags ?? extras.tags ?? [],
   }
 }
 

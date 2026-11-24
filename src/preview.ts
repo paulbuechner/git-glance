@@ -71,7 +71,8 @@ async function responseFor(root: string, realRoot: string, urlPath: string): Pro
     return responseFor(root, realRoot, next)
   }
   if (!info.isFile()) return new Response('Not found', { status: 404 })
-  return new Response(Bun.file(realFile))
+  // Reports are regenerated in place; never let the browser show a stale copy on reload.
+  return new Response(Bun.file(realFile), { headers: { 'Cache-Control': 'no-store' } })
 }
 
 function listen(root: string, realRoot: string) {

@@ -53,6 +53,8 @@ const CSS_BASE = `
   --type-style: #f472b6;
   --type-merge: #a8a29e;
   --type-other: #56627a;
+  --added: #34d399;
+  --deleted: #f87171;
   --font: "Segoe UI", "Helvetica Neue", system-ui, sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -105,6 +107,8 @@ const CSS_BASE = `
   --type-style: #db2777;
   --type-merge: #94a3b8;
   --type-other: #cbd5e1;
+  --added: #059669;
+  --deleted: #dc2626;
 }
 * { box-sizing: border-box; }
 html, body { min-height: 100%; }
@@ -271,9 +275,183 @@ main {
 .chart-legend .gap-active::before { background: var(--accent); }
 .chart-legend .gap-empty::before { background: var(--gap-empty); }
 .chart-legend .gap-other::before { background: var(--gap-other); }
-#lanes, #bars, #stack, #gaps, #heatmap, #churn, #types, #sizes, #punchcard, #hotspots, #branches, #collab, #prs, #reviews, #ci {
+#lanes, #calendar, #weekdays, #heatmap, #churn, #types, #sizes, #punchcard, #hotspots, #branches, #collab, #prs, #reviews, #ci, #evo-years, #authors {
   overflow-x: auto;
 }
+#lanes svg, #calendar svg, #evolution svg, #evo-strip svg, #heatmap svg { display: block; overflow: visible; }
+.filterbar {
+  position: sticky;
+  top: 0;
+  z-index: 25;
+  max-width: 1100px;
+  margin: 0 auto 1.15rem;
+  padding: 0.7rem 1.5rem 0.35rem;
+  background: var(--bg);
+}
+.filterbar::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  width: 100vw;
+  height: 1px;
+  transform: translateX(-50%);
+  background: var(--line);
+}
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem 0.9rem;
+  align-items: center;
+}
+.filters label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.filters select {
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--ink);
+  max-width: 260px;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  background: var(--select-bg);
+  cursor: pointer;
+}
+#range-label { margin: 0; font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.evo-controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  color: var(--muted);
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  background: var(--select-bg);
+  cursor: pointer;
+}
+.icon-btn:hover { color: var(--ink); }
+.icon-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.icon-btn .icon-collapse, .expanded .icon-btn .icon-expand { display: none; }
+.expanded .icon-btn .icon-collapse { display: block; }
+.card:not(.expanded) .expanded-only { display: none; }
+/* The Activity card as a full-page graph tool. */
+.card.expanded {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  margin: 0;
+  overflow: auto;
+  border-radius: 0;
+  animation: none;
+  backdrop-filter: none;
+  background: var(--bg);
+}
+html.graph-expanded, html.graph-expanded body { overflow: hidden; }
+.card.expanded .evo-people { max-height: calc(100vh - 230px); }
+.evo-body {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+.evo-main { min-width: 0; }
+.evo-people {
+  display: flex;
+  flex-direction: column;
+  max-height: 340px;
+  padding-right: 0.75rem;
+  border-right: 1px solid var(--line);
+}
+@media (max-width: 760px) {
+  .evo-body { grid-template-columns: minmax(0, 1fr); }
+  .evo-people { max-height: 220px; padding-right: 0; border-right: 0; }
+}
+.evo-people-head { display: flex; gap: 0.4rem; align-items: center; margin-bottom: 0.4rem; }
+#evo-people-search {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--ink);
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  background: var(--select-bg);
+}
+#evo-people { overflow-y: auto; }
+.person {
+  display: grid;
+  grid-template-columns: auto 10px minmax(0, 1fr) auto;
+  gap: 0.45rem;
+  align-items: center;
+  padding: 0.2rem 0.25rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.person:hover { background: var(--card-inset); }
+.person input { margin: 0; accent-color: var(--accent); }
+.person-swatch { width: 10px; height: 10px; border-radius: 2px; border: 1px solid var(--line); }
+.person.on .person-swatch { border-color: transparent; }
+.person-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.person.on .person-name { color: var(--ink); font-weight: 600; }
+.person-value { font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+.person-more { margin: 0.4rem 0 0; font-size: 0.75rem; }
+button.link {
+  font: inherit;
+  font-size: 0.78rem;
+  color: var(--accent);
+  padding: 0 0.2rem;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+#evo-strip { margin-top: 0.35rem; }
+#evo-strip .selection { fill: var(--accent); fill-opacity: 0.16; stroke: var(--accent); stroke-opacity: 0.7; }
+#evo-strip .handle { fill: var(--accent); fill-opacity: 0.4; }
+.scope {
+  margin-left: 0.5rem;
+  padding: 0.05rem 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--muted);
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  vertical-align: 2px;
+  white-space: nowrap;
+}
+#evo-summary strong, #summary strong { color: var(--ink); font-weight: 650; }
+.chart-legend .evo-cum::before {
+  height: 2px;
+  border-radius: 1px;
+  vertical-align: 3px;
+  background: var(--ink);
+  opacity: 0.55;
+}
+.chart-legend .evo-tag::before {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  transform: rotate(45deg);
+  background: var(--heading);
+}
+.card h3.sub {
+  margin: 1.35rem 0 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+/* Grid items default to min-width: auto, so one wide chart would widen the whole page. */
+main > *, .row-2 > * { min-width: 0; }
 .row-2 {
   display: grid;
   gap: 1.15rem;
@@ -292,6 +470,8 @@ main {
   gap: 0.75rem;
 }
 .kpi {
+  min-width: 0;
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 0.7rem 0.85rem;
@@ -309,8 +489,10 @@ main {
   color: var(--heading);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.kpi .delta { font-size: 0.75rem; color: var(--muted); min-height: 1.1em; }
+.kpi .delta { font-size: 0.75rem; color: var(--muted); min-height: 1.1em; overflow-wrap: anywhere; }
 .kpi .delta.up { color: var(--accent); }
 .kpi .delta.down { color: var(--gap-empty); }
 .segmented {
@@ -408,11 +590,24 @@ tr.subject td:first-child {
   font-family: var(--mono);
   white-space: pre-wrap;
   max-width: 420px;
-  z-index: 30;
+  z-index: 80;
   backdrop-filter: blur(12px);
   box-shadow: 0 12px 40px var(--card-shadow);
   transition: opacity 0.12s ease;
 }
+/* Lines added and deleted in tooltips, tables and labels (the Overview tiles stay neutral). */
+.add { color: var(--added); }
+.del { color: var(--deleted); }
+.tip-row { white-space: pre-wrap; }
+.tip-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 0.45rem;
+  border-radius: 2px;
+  vertical-align: -1px;
+}
+.tip-swatch.line { height: 2px; vertical-align: 3px; opacity: 0.7; }
 code {
   font-family: var(--mono);
   font-size: 0.85em;
@@ -461,21 +656,28 @@ function escapeHtml(text: string): string {
 function githubSections(): string {
   return `
       <section class="card">
-        <h2>Pull requests</h2>
-        <p class="hint">Pull requests by the selected author that were opened, merged, closed or reviewed in the window.</p>
+        <h2>Pull requests<span class="scope"></span></h2>
+        <p class="hint">Pull requests by the selected author that were opened, merged, closed or reviewed in the report window.</p>
         <div id="prs"></div>
       </section>
       <section class="card">
-        <h2>Reviews given</h2>
-        <p class="hint">Reviews the selected author left on other people's pull requests in the window.</p>
+        <h2>Reviews given<span class="scope"></span></h2>
+        <p class="hint">Reviews the selected author left on other people's pull requests in the report window.</p>
         <div id="reviews"></div>
       </section>
       <section class="card">
-        <h2>CI health</h2>
+        <h2>CI health<span class="scope"></span></h2>
         <p class="hint">GitHub Actions runs on the selected author's commits and pull request branches. Cancelled and skipped runs do not count toward the pass rate.</p>
         <div id="ci"></div>
       </section>`
 }
+
+/** Tab icon: an eye whose pupil is a commit node on a git line, white on the accent blue. */
+const FAVICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#346bf1"/>' +
+  '<path d="M16 3.5v5.2M16 23.3v5.2" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>' +
+  '<path d="M4.5 16c3.1-4.9 6.9-7.3 11.5-7.3s8.4 2.4 11.5 7.3c-3.1 4.9-6.9 7.3-11.5 7.3S7.6 20.9 4.5 16z" fill="none" stroke="#fff" stroke-width="2.2" stroke-linejoin="round"/>' +
+  '<circle cx="16" cy="16" r="3.8" fill="#fff"/></svg>'
 
 function escapeScriptJson(json: string): string {
   return json.replace(/</g, '\\u003c')
@@ -496,7 +698,18 @@ ${lightVars}
   return `${CSS_BASE}\n${repoTheme}`
 }
 
-export async function renderHtml(data: ReportData, projectRoot: string): Promise<string> {
+function segmented(id: string, label: string, options: [string, string][]): string {
+  const buttons = options
+    .map(([mode, text]) => `<button type="button" data-mode="${mode}" aria-pressed="false">${text}</button>`)
+    .join('')
+  return `<div class="segmented" id="${id}" role="group" aria-label="${label}">${buttons}</div>`
+}
+
+/**
+ * @param themeCss Optional CSS (the config's `theme` file) applied after the built-in
+ *   styles, so it can override any token or rule.
+ */
+export async function renderHtml(data: ReportData, projectRoot: string, themeCss = ''): Promise<string> {
   const entry = resolve(projectRoot, 'src/html/report.ts')
   const result = await Bun.build({
     entrypoints: [entry],
@@ -513,40 +726,31 @@ export async function renderHtml(data: ReportData, projectRoot: string): Promise
   if (!artifact) throw new Error('Bun.build produced no output')
   const script = await artifact.text()
 
+  // The dashboard derives everything from `history` (whole range) and `allCommits`
+  // (report window, with file lists); the server-side window aggregates stay in the markdown.
   const payload = {
-    days: data.days,
-    weekdays: data.weekdays,
-    grain: data.grain,
     repos: data.repos,
     repoLabels: data.repoLabels,
     subjectEmails: data.subjectEmails,
-    workspaceMarks: data.workspaceMarks,
-    repoMarks: data.repoMarks,
     allCommits: data.allCommits,
-    subjectCommits: data.subjectCommits,
-    authors: data.authors,
-    emptyWeekdays: data.emptyWeekdays.map((e) => ({
-      day: e.day,
-      weekday: e.weekday,
-    })),
     window: data.window,
-    previousWindow: data.previousWindow,
-    // Only totals are compared; file lists would just bloat the page.
-    previousCommits: data.previousCommits.map((c) => ({ ...c, subject: '', files: [] })),
     branches: data.branches,
-    tags: data.tags,
+    allTags: data.allTags,
     github: data.github,
+    history: data.history,
   }
 
   const json = escapeScriptJson(JSON.stringify(payload))
   const css = buildCss(data.repos.length)
+  const theme = themeCss ? `\n  <style id="theme">${themeCss.replace(/<\/style/gi, '<\\/style')}</style>` : ''
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Commit visibility — ${data.window.start} to ${data.window.end}</title>
+  <title>Git Glance — ${data.window.start} to ${data.window.end}</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,${encodeURIComponent(FAVICON)}" />
   <script>
     (function () {
       try {
@@ -560,13 +764,13 @@ export async function renderHtml(data: ReportData, projectRoot: string): Promise
       }
     })();
   </script>
-  <style>${css}</style>
+  <style>${css}</style>${theme}
 </head>
 <body>
   <div class="aurora" aria-hidden="true"></div>
   <div class="shell">
     <header>
-      <h1>Commit visibility</h1>
+      <h1>Git Glance</h1>
       <p id="subtitle"></p>${
         data.githubNote
           ? `
@@ -574,102 +778,148 @@ export async function renderHtml(data: ReportData, projectRoot: string): Promise
           : ''
       }
       <div class="controls no-export">
-        <label for="author">Author</label>
-        <select id="author"></select>
         <button type="button" id="theme-toggle" aria-pressed="false">Theme</button>
         <button type="button" id="export-png">Export PNG</button>
         <button type="button" id="export-pdf" title="Opens the print dialog; choose Save as PDF">Print / PDF</button>
       </div>
     </header>
+    <div class="filterbar no-export">
+      <div class="filters">
+        <label>Author <select id="author"></select></label>
+        ${segmented('f-range', 'Range', [
+          ['day', 'Day'],
+          ['week', 'Week'],
+          ['month', 'Month'],
+          ['90d', '90D'],
+        ])}
+        ${segmented('f-metric', 'Metric', [
+          ['commits', 'Commits'],
+          ['lines', 'Lines'],
+        ])}
+        <p id="range-label"></p>
+      </div>
+    </div>
     <main>
       <section class="card">
         <h2>Overview</h2>
         <p class="hint" id="kpi-hint"></p>
         <div id="kpis" class="kpis"></div>
       </section>
+      <section class="card" id="activity-card">
+        <div class="card-head">
+          <h2 id="evo-title">Activity</h2>
+          <div class="evo-controls no-export">
+            <span class="expanded-only">${segmented('g-metric', 'Metric', [
+              ['commits', 'Commits'],
+              ['lines', 'Lines'],
+            ])}</span>
+            ${segmented('g-range', 'Graph range', [
+              ['6m', '6M'],
+              ['1y', '1Y'],
+              ['5y', '5Y'],
+              ['all', 'All'],
+            ])}
+            ${segmented('g-grain', 'Graph grouping', [
+              ['week', 'Week'],
+              ['month', 'Month'],
+              ['year', 'Year'],
+            ])}
+            <button type="button" id="g-expand" class="icon-btn" aria-pressed="false" aria-label="Expand the graph" title="Expand the graph (Esc closes)">
+              <svg class="icon-expand" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+              <svg class="icon-collapse" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg>
+            </button>
+          </div>
+        </div>
+        <p class="hint" id="evo-summary"></p>
+        <div class="evo-body">
+          <aside class="evo-people" aria-label="People in the graph">
+            <div class="evo-people-head no-export">
+              <input type="search" id="evo-people-search" placeholder="Add people…" aria-label="Search people to add to the graph" />
+              <button type="button" id="evo-people-clear" class="link" hidden>Clear</button>
+            </div>
+            <div id="evo-people"></div>
+          </aside>
+          <div class="evo-main">
+            <div id="evolution"></div>
+            <div id="evo-strip" class="no-export" title="Drag to choose the graph range; click outside the selection to reset"></div>
+          </div>
+        </div>
+        <div class="chart-legend" id="evo-legend"></div>
+        <h3 class="sub">By year</h3>
+        <div id="evo-years"></div>
+      </section>
+      <section class="card">
+        <h2>Activity calendar</h2>
+        <p class="hint" id="calendar-hint"></p>
+        <div id="calendar"></div>
+      </section>
       <section class="card">
         <h2>Repo lanes</h2>
-        <p id="summary"></p>
-        <p class="hint" id="lanes-hint" hidden></p>
-        <div class="legend">
-          <span class="workspace-note" id="workspace-legend">Workspace = any repo that day</span>
-          <span class="weekend" id="weekend-legend">Weekend with commits</span>
-          <span class="weekend-empty" id="weekend-empty-legend">Weekend, no commits</span>
-          <span class="empty">No commits</span>
-        </div>
-        <div class="chart-legend" id="lanes-repo-legend"></div>
+        <p class="hint" id="summary"></p>
         <div id="lanes"></div>
       </section>
       <section class="card">
-        <h2 id="stack-title">Commits by day and repo</h2>
-        <p class="hint">Stacked by repository for the selected author. ◆ marks a tag created that day.</p>
-        <div id="stack"></div>
-      </section>
-      <section class="card">
         <div class="card-head">
-          <h2 id="churn-title">Lines added and deleted by day</h2>
+          <h2 id="churn-title">Lines added and deleted</h2>
           <div class="segmented no-export" id="churn-scale" role="group" aria-label="Y axis scale">
             <button type="button" data-mode="log" aria-pressed="true">Log</button>
             <button type="button" data-mode="linear" aria-pressed="false">Linear</button>
           </div>
         </div>
-        <p class="hint">Added above the line, deleted below, stacked by repo. Log scale keeps one huge day from flattening the rest; switch to linear for true proportions.</p>
+        <p class="hint">Added above the line, deleted below, stacked by repo. Log scale keeps one huge period from flattening the rest; switch to linear for true proportions.</p>
         <div id="churn"></div>
-      </section>
-      <section class="card">
-        <h2 id="bars-title">Weekday commit volume</h2>
-        <div id="bars"></div>
-      </section>
-      <section class="card">
-        <h2 id="gaps-title">Weekday gaps</h2>
-        <p class="hint" id="gaps-hint">One cell per weekday in the window.</p>
-        <div id="gaps"></div>
       </section>
       <div class="row-2">
         <section class="card">
-          <h2>Commit types</h2>
-          <p class="hint">From Conventional Commit prefixes (feat:, fix(scope):, …). Anything else is “other”.</p>
-          <div id="types"></div>
+          <h2>Volume by weekday</h2>
+          <p class="hint">Totals per weekday across the range; weekends in grey.</p>
+          <div id="weekdays"></div>
         </section>
         <section class="card">
           <h2>Commit size</h2>
-          <p class="hint">Lines added + deleted per commit, merges excluded.</p>
+          <p class="hint" id="sizes-hint">Lines added + deleted per commit, merges excluded.</p>
           <div id="sizes"></div>
         </section>
       </div>
       <section class="card">
+        <h2>Commit types</h2>
+        <p class="hint">From Conventional Commit prefixes (feat:, fix(scope):, …). Anything else is “other”. Bar share follows the metric.</p>
+        <div id="types"></div>
+      </section>
+      <section class="card">
         <h2>Weekday × hour</h2>
-        <p class="hint">Author-date weekday and hour (local offset in the commit). Dot area = commits; totals on the right.</p>
+        <p class="hint">Author-date weekday and hour (local offset in the commit). Dot area follows the metric; totals on the right.</p>
         <div id="punchcard"></div>
       </section>
       <section class="card">
         <div class="card-head">
-          <h2>Hotspots</h2>
+          <h2>Hotspots<span class="scope"></span></h2>
           <div class="segmented no-export" id="hotspots-mode" role="group" aria-label="Group hotspots by">
             <button type="button" data-mode="files" aria-pressed="true">Files</button>
             <button type="button" data-mode="folders" aria-pressed="false">Folders</button>
           </div>
         </div>
-        <p class="hint">Most-touched paths for the selected author, ranked by commits that changed them.</p>
+        <p class="hint">Most-changed paths for the selected author, ranked by the metric. File lists are only loaded for the report window.</p>
         <div id="hotspots"></div>
       </section>
       <section class="card">
-        <h2>Work in flight</h2>
-        <p class="hint">Branches that moved in the window and still hold commits not on the default branch.</p>
+        <h2>Work in flight<span class="scope"></span></h2>
+        <p class="hint">Branches that moved in the report window and still hold commits not on the default branch.</p>
         <div id="branches"></div>
       </section>${data.github ? githubSections() : ''}
       <section class="card">
-        <h2>Collaboration</h2>
+        <h2>Collaboration<span class="scope"></span></h2>
         <p class="hint">Share of lines changed by the selected author, per repo and on the files they touched, and who else changed those files.</p>
         <div id="collab"></div>
       </section>
       <section class="card">
         <h2>Authors × repos</h2>
-        <p class="hint">Commit counts for everyone in the window.</p>
+        <p class="hint">Top authors and repos in the range, by the metric.</p>
         <div id="heatmap"></div>
       </section>
       <section class="card">
         <h2>Authors</h2>
+        <p class="hint">Everyone with commits in the range, ranked by the metric.</p>
         <div id="authors"></div>
       </section>
     </main>

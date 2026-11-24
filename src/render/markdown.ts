@@ -275,7 +275,7 @@ export function renderMarkdown(data: ReportData): string {
   const lines: string[] = []
 
   lines.push(
-    `# Commit visibility, ${formatDayLong(data.window.start)}–${formatDayLong(data.window.end)} ${parseDay(data.window.end).getUTCFullYear()}`,
+    `# Git Glance, ${formatDayLong(data.window.start)}–${formatDayLong(data.window.end)} ${parseDay(data.window.end).getUTCFullYear()}`,
   )
   lines.push('')
   lines.push(`**Date:** ${formatDayFull(data.generatedOn)}`)

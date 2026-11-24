@@ -28,7 +28,8 @@ afterAll(() => {
 
 describe('resolveConfigPath', () => {
   test('absolute, ~ and project-relative paths', () => {
-    expect(resolveConfigPath('/abs/x')).toBe('/abs/x')
+    // resolve() keeps this platform-neutral: '/abs/x' on POSIX, '<current drive>:\abs\x' on Windows.
+    expect(resolveConfigPath('/abs/x')).toBe(resolve('/abs/x'))
     expect(resolveConfigPath('~/code/x')).toBe(join(homedir(), 'code/x'))
     expect(resolveConfigPath('..')).toBe(resolve(projectRoot, '..'))
   })

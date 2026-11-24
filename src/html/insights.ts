@@ -1,27 +1,44 @@
 import * as d3 from 'd3'
 import { COMMIT_TYPES, SIZE_BUCKETS, commitType, sizeBucket, sizeBucketLabel } from '../commit-kinds.ts'
 import {
+  activeRepos,
+  authorNameFor,
+  churnParts,
   commitsForAuthor,
   data,
   fillRepoLegend,
   grain,
   hideTip,
+  historyForAuthor,
   hourFromIso,
+  lineCount,
+  metric,
+  metricName,
+  metricOf,
+  metricText,
+  num,
   periodAxisLabel,
   periodOf,
+  periodTitle,
   prefersReducedMotion,
+  previousCommitsForAuthor,
+  previousRange,
+  range,
   repoColor,
   repoLabel,
   shortHash,
   showTip,
+  slotNoun,
+  sparseTicks,
   styleAxis,
+  view,
+  widthOf,
+  windowCommitsForAuthor,
 } from './common.ts'
-import type { AuthorSummary, Commit } from './common.ts'
+import type { AuthorSummary, Commit, TipLine } from './common.ts'
 import { branchPrCell } from './github.ts'
 
 type Container = d3.Selection<HTMLElement, unknown, null, undefined>
-
-const num = d3.format(',')
 
 function plural(n: number, word: string): string {
   return `${num(n)} ${word}${n === 1 ? '' : 's'}`
@@ -31,24 +48,6 @@ function emailsOf(author: AuthorSummary): Set<string> {
   return new Set(author.emails.map((e) => e.toLowerCase()))
 }
 
-function previousCommitsForAuthor(author: AuthorSummary): Commit[] {
-  const emails = emailsOf(author)
-  return data.previousCommits.filter((c) => emails.has(c.authorEmail.toLowerCase()))
-}
-
-function authorNameFor(email: string): string {
-  return data.authors.find((a) => a.emails.includes(email.toLowerCase()))?.name ?? email
-}
-
-function linesChanged(c: Commit): number {
-  return c.added + c.deleted
-}
-
-/** Same x-axis periods as the stacked commits chart. */
-export function chartPeriods(): string[] {
-  return grain === 'month' || data.days.length > 45 ? data.weekdays : data.days
-}
-
 function emptyNote(container: Container, text: string) {
   container.append('p').attr('class', 'hint').text(text)
 }
@@ -56,7 +55,7 @@ function emptyNote(container: Container, text: string) {
 // ---------------------------------------------------------------------------
 // KPI tiles
 
-/** Longest run and the run ending at the last slot (today may still be empty). */
+/** Longest run and the run ending at the last slot (the current one may still be empty). */
 function streaks(slots: string[], active: Set<string>): { current: number; longest: number } {
   let longest = 0
   let run = 0
@@ -65,7 +64,7 @@ function streaks(slots: string[], active: Set<string>): { current: number; longe
     longest = Math.max(longest, run)
   }
   let i = slots.length - 1
-  if (i >= 0 && !active.has(slots[i]!) && slots[i] === periodOf(data.window.end)) i--
+  if (i >= 0 && !active.has(slots[i]!) && slots[i] === periodOf(range.end)) i--
   let current = 0
   while (i >= 0 && active.has(slots[i]!)) {
     current++
@@ -78,15 +77,21 @@ function median(values: number[]): number {
   return values.length === 0 ? 0 : Math.round(d3.median(values) ?? 0)
 }
 
-type Kpi = { label: string; value: string; now?: number; prev?: number; note?: string }
+type Kpi = { label: string; value: string; title?: string; now?: number; prev?: number; note?: string }
+
+/** Tile number: exact up to 99,999, compact above (1.95M) so it fits the tile; exact value in `title`. */
+function tileNumber(n: number, sign = ''): { value: string; title: string } {
+  const exact = `${sign}${num(n)}`
+  return { value: n >= 100_000 ? `${sign}${d3.format('.3~s')(n)}` : exact, title: exact }
+}
 
 function kpiStats(commits: Commit[]) {
   return {
     commits: commits.length,
-    activeDays: new Set(commits.map((c) => periodOf(c.day))).size,
+    activeDays: new Set(commits.map((c) => c.day)).size,
     added: d3.sum(commits, (c) => c.added),
     deleted: d3.sum(commits, (c) => c.deleted),
-    medianSize: median(commits.map(linesChanged)),
+    medianSize: median(commits.map(lineCount)),
     repos: new Set(commits.map((c) => c.repo)).size,
   }
 }
@@ -95,29 +100,26 @@ export function drawKpis(container: Container, author: AuthorSummary) {
   container.selectAll('*').remove()
   const commits = commitsForAuthor(author)
   const now = kpiStats(commits)
-  const prev = data.previousWindow ? kpiStats(previousCommitsForAuthor(author)) : null
-  const unit = grain === 'month' ? 'month' : 'weekday'
-  const { current, longest } = streaks(data.weekdays, new Set(commits.map((c) => periodOf(c.day))))
+  // No comparison when the range starts at (or before) the author's first commit.
+  const first = historyForAuthor(author)[0]?.day
+  const comparable = previousRange !== null && first !== undefined && first < range.start
+  const prev = comparable ? kpiStats(previousCommitsForAuthor(author)) : null
+  const { current, longest } = streaks(view.slots, new Set(commits.map((c) => periodOf(c.day))))
 
   const tiles: Kpi[] = [
-    { label: 'Commits', value: num(now.commits), now: now.commits, prev: prev?.commits },
-    {
-      label: grain === 'month' ? 'Active months' : 'Active days',
-      value: num(now.activeDays),
-      now: now.activeDays,
-      prev: prev?.activeDays,
-    },
-    { label: 'Lines added', value: `+${num(now.added)}`, now: now.added, prev: prev?.added },
-    { label: 'Lines deleted', value: `−${num(now.deleted)}`, now: now.deleted, prev: prev?.deleted },
+    { label: 'Commits', ...tileNumber(now.commits), now: now.commits, prev: prev?.commits },
+    { label: 'Active days', ...tileNumber(now.activeDays), now: now.activeDays, prev: prev?.activeDays },
+    { label: 'Lines added', ...tileNumber(now.added, '+'), now: now.added, prev: prev?.added },
+    { label: 'Lines deleted', ...tileNumber(now.deleted, '−'), now: now.deleted, prev: prev?.deleted },
     {
       label: 'Median commit size',
-      value: num(now.medianSize),
+      ...tileNumber(now.medianSize),
       now: now.medianSize,
       prev: prev?.medianSize,
       note: 'lines',
     },
     { label: 'Repos touched', value: `${now.repos} / ${data.repos.length}`, now: now.repos, prev: prev?.repos },
-    { label: 'Current streak', value: num(current), note: `${unit}s · longest ${num(longest)}` },
+    { label: 'Current streak', value: num(current), note: `${slotNoun(true)} · longest ${num(longest)}` },
   ]
 
   const tile = container.selectAll('div.kpi').data(tiles).join('div').attr('class', 'kpi')
@@ -128,6 +130,7 @@ export function drawKpis(container: Container, author: AuthorSummary) {
   tile
     .append('div')
     .attr('class', 'value')
+    .attr('title', (d) => d.title ?? null)
     .text((d) => d.value)
   tile.each(function (d) {
     const el = d3.select(this).append('div').attr('class', 'delta')
@@ -142,13 +145,13 @@ export function drawKpis(container: Container, author: AuthorSummary) {
     const pct = Math.round(((d.now - d.prev) / d.prev) * 100)
     el.classed('up', pct > 0)
       .classed('down', pct < 0)
-      .text(`${pct > 0 ? '▲' : pct < 0 ? '▼' : '='} ${Math.abs(pct)}% vs ${num(d.prev)}`)
+      .text(`${pct > 0 ? '▲' : pct < 0 ? '▼' : '='} ${num(Math.abs(pct))}% vs ${tileNumber(d.prev).value}`)
   })
 
   d3.select('#kpi-hint').text(
-    data.previousWindow
-      ? `Compared with ${data.previousWindow.start} → ${data.previousWindow.end}. Line counts skip merges, lock files and build output.`
-      : 'All-time window: no earlier period to compare. Line counts skip merges, lock files and build output.',
+    comparable && previousRange
+      ? `${range.start} → ${range.end}, compared with ${previousRange.start} → ${previousRange.end}. Line counts skip merges and excluded paths.`
+      : `${range.start} → ${range.end}: starts at this author's first commit, so there is no earlier period to compare. Line counts skip merges and excluded paths.`,
   )
 }
 
@@ -166,35 +169,34 @@ function decades(max: number): number[] {
 
 export function drawChurn(container: Container, author: AuthorSummary, scale: ChurnScale) {
   container.selectAll('*').remove()
+  d3.select('#churn-title').text(`Lines added and deleted per ${grain}`)
   const commits = commitsForAuthor(author)
-  const periods = chartPeriods()
+  if (commits.length === 0) return emptyNote(container, 'No commits in the selected range.')
+  const periods = view.periods
+  const repos = activeRepos(commits)
 
   type Row = { day: string } & Record<string, number | string>
+  const byPeriod = d3.group(commits, (c) => periodOf(c.day))
   const sumBy = (field: 'added' | 'deleted'): Row[] =>
     periods.map((day) => {
       const row: Row = { day }
-      for (const repo of data.repos) {
-        row[repo] = d3.sum(
-          commits.filter((c) => c.repo === repo && periodOf(c.day) === day),
-          (c) => c[field],
-        )
-      }
+      const inPeriod = byPeriod.get(day) ?? []
+      for (const repo of repos) row[repo] = 0
+      for (const c of inPeriod) row[c.repo] = Number(row[c.repo] ?? 0) + c[field]
       return row
     })
-  const addedRows = sumBy('added')
-  const deletedRows = sumBy('deleted')
   const stack = d3
     .stack<Row>()
-    .keys(data.repos)
+    .keys(repos)
     .value((d, key) => Number(d[key] ?? 0))
-  const up = stack(addedRows)
-  const down = stack(deletedRows)
+  const up = stack(sumBy('added'))
+  const down = stack(sumBy('deleted'))
 
   const maxUp = Math.max(1, d3.max(up[up.length - 1] ?? [], (d) => d[1]) ?? 1)
   const maxDown = Math.max(1, d3.max(down[down.length - 1] ?? [], (d) => d[1]) ?? 1)
 
-  const margin = { top: 12, right: 64, bottom: 32, left: 52 }
-  const width = Math.max(640, periods.length * (grain === 'month' ? 28 : 18))
+  const margin = { top: 12, right: 72, bottom: 32, left: 52 }
+  const width = widthOf(container.node(), 640)
   const height = 280
   const innerW = width - margin.left - margin.right
   const innerH = height - margin.top - margin.bottom
@@ -204,11 +206,15 @@ export function drawChurn(container: Container, author: AuthorSummary, scale: Ch
     .attr('viewBox', `0 0 ${width} ${height}`)
     .attr('width', '100%')
     .attr('role', 'img')
-    .attr('aria-label', `Lines added and deleted by ${grain === 'month' ? 'month' : 'day'} for ${author.name}`)
+    .attr('aria-label', `Lines added and deleted per ${grain} for ${author.name}`)
   const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`)
 
-  const x = d3.scaleBand().domain(periods).range([0, innerW]).padding(0.15)
-  // Symlog keeps a 10k-line formatting day from flattening every other bar; linear keeps
+  const x = d3
+    .scaleBand()
+    .domain(periods)
+    .range([0, innerW])
+    .padding(periods.length > 120 ? 0 : 0.15)
+  // Symlog keeps one 10k-line day from flattening every other bar; linear keeps
   // stacked segments proportional.
   const y =
     scale === 'log'
@@ -225,12 +231,17 @@ export function drawChurn(container: Container, author: AuthorSummary, scale: Ch
       d3
         .axisLeft(y)
         .tickValues(ticks)
-        .tickFormat((v) => d3.format('~s')(Math.abs(Number(v)))),
+        .tickFormat((v) => d3.format('.3~s')(Math.abs(Number(v)))),
     )
     .call(styleAxis)
   g.append('g')
     .attr('transform', `translate(0,${innerH})`)
-    .call(d3.axisBottom(x).tickFormat((d) => periodAxisLabel(String(d))))
+    .call(
+      d3
+        .axisBottom(x)
+        .tickValues(sparseTicks(periods, Math.floor(innerW / 56)))
+        .tickFormat((d) => periodAxisLabel(String(d))),
+    )
     .call(styleAxis)
   g.append('line')
     .attr('x1', 0)
@@ -239,23 +250,38 @@ export function drawChurn(container: Container, author: AuthorSummary, scale: Ch
     .attr('y2', zero)
     .attr('stroke', 'var(--axis-stroke)')
 
-  const tipFor = (day: string) => {
-    const inDay = commits.filter((c) => periodOf(c.day) === day)
+  const tipFor = (day: string): string | TipLine[] => {
+    const inDay = byPeriod.get(day) ?? []
+    if (inDay.length === 0) return `${periodTitle(day)}: no commits`
     const added = d3.sum(inDay, (c) => c.added)
     const deleted = d3.sum(inDay, (c) => c.deleted)
-    if (inDay.length === 0) return `${periodAxisLabel(day)}: no commits`
-    const label = grain === 'month' ? periodAxisLabel(day) : day
     const net = added - deleted
-    const rows = data.repos
-      .map((repo) => {
-        const rc = inDay.filter((c) => c.repo === repo)
-        if (rc.length === 0) return null
-        return `${repoLabel(repo)}: +${num(d3.sum(rc, (c) => c.added))} −${num(d3.sum(rc, (c) => c.deleted))}`
-      })
-      .filter(Boolean)
-    return `${label} — +${num(added)} −${num(deleted)} (net ${net >= 0 ? '+' : '−'}${num(Math.abs(net))})\n${rows.join('\n')}`
+    const rows = d3
+      .rollups(
+        inDay,
+        (v) => [d3.sum(v, (c) => c.added), d3.sum(v, (c) => c.deleted)] as const,
+        (c) => c.repo,
+      )
+      .sort((a, b) => b[1][0] + b[1][1] - (a[1][0] + a[1][1]))
+      .map(
+        ([repo, [a, d]]): TipLine => ({
+          text: [{ text: `${repoLabel(repo)}: ` }, ...churnParts(a, d)],
+          color: repoColor(repo),
+        }),
+      )
+    return [
+      {
+        text: [
+          { text: `${periodTitle(day)} — ` },
+          ...churnParts(added, deleted),
+          { text: ` (net ${net >= 0 ? '+' : '−'}${num(Math.abs(net))})` },
+        ],
+      },
+      ...rows,
+    ]
   }
 
+  const bw = Math.max(1, x.bandwidth())
   const drawSide = (series: d3.Series<Row, string>[], sign: 1 | -1) => {
     const rects = g
       .append('g')
@@ -265,15 +291,15 @@ export function drawChurn(container: Container, author: AuthorSummary, scale: Ch
       .attr('fill', (d) => repoColor(d.key))
       .attr('fill-opacity', sign === 1 ? 1 : 0.55)
       .selectAll('rect')
-      .data((d) => d)
+      .data((d) => d.filter((p) => p[1] > p[0]))
       .join('rect')
       .attr('x', (d) => x(String(d.data.day))!)
-      .attr('width', x.bandwidth())
+      .attr('width', bw)
       .on('mousemove', (event: MouseEvent, d) => showTip(event, tipFor(String(d.data.day))))
       .on('mouseleave', hideTip)
     const top = (d: d3.SeriesPoint<Row>) => (sign === 1 ? y(d[1]) : y(-d[0]))
     const h = (d: d3.SeriesPoint<Row>) => Math.abs(y(sign * d[1]) - y(sign * d[0]))
-    if (prefersReducedMotion()) {
+    if (prefersReducedMotion() || periods.length > 120) {
       rects.attr('y', top).attr('height', h)
     } else {
       rects.attr('y', zero).attr('height', 0).transition().duration(400).attr('y', top).attr('height', h)
@@ -295,45 +321,7 @@ export function drawChurn(container: Container, author: AuthorSummary, scale: Ch
     .attr('fill', 'var(--muted)')
     .text('▼ deleted')
 
-  fillRepoLegend(container.append('div').attr('class', 'chart-legend'))
-}
-
-// ---------------------------------------------------------------------------
-// Tag markers (drawn into the stacked commits chart)
-
-export function drawTagMarkers(
-  g: d3.Selection<SVGGElement, unknown, null, undefined>,
-  x: d3.ScaleBand<string>,
-  innerH: number,
-) {
-  const byPeriod = d3.group(
-    data.tags.filter((t) => x(periodOf(t.day)) !== undefined),
-    (t) => periodOf(t.day),
-  )
-  for (const [period, tags] of byPeriod) {
-    const cx = x(period)! + x.bandwidth() / 2
-    const tipText = [
-      `${period} — ${plural(tags.length, 'tag')}`,
-      ...tags.map((t) => `${repoLabel(t.repo)}: ${t.name}`),
-    ].join('\n')
-    const marker = g.append('g').attr('class', 'tag-marker')
-    marker
-      .append('line')
-      .attr('x1', cx)
-      .attr('x2', cx)
-      .attr('y1', 0)
-      .attr('y2', innerH)
-      .attr('stroke', 'var(--muted)')
-      .attr('stroke-dasharray', '2 3')
-      .attr('opacity', 0.6)
-    marker
-      .append('path')
-      .attr('d', d3.symbol(d3.symbolDiamond, 48)())
-      .attr('transform', `translate(${cx},-4)`)
-      .attr('fill', 'var(--heading)')
-      .on('mousemove', (event: MouseEvent) => showTip(event, tipText))
-      .on('mouseleave', hideTip)
-  }
+  fillRepoLegend(container.append('div').attr('class', 'chart-legend'), repos)
 }
 
 // ---------------------------------------------------------------------------
@@ -342,32 +330,37 @@ export function drawTagMarkers(
 export function drawTypes(container: Container, author: AuthorSummary) {
   container.selectAll('*').remove()
   const commits = commitsForAuthor(author)
-  if (commits.length === 0) return emptyNote(container, 'No commits in this window.')
+  if (commits.length === 0) return emptyNote(container, 'No commits in the selected range.')
 
   const rows = [
     { key: 'all', label: 'All repos', commits },
-    ...data.repos
-      .map((repo) => ({ key: repo, label: repoLabel(repo), commits: commits.filter((c) => c.repo === repo) }))
-      .filter((r) => r.commits.length > 0),
+    ...activeRepos(commits).map((repo) => ({
+      key: repo,
+      label: repoLabel(repo),
+      commits: commits.filter((c) => c.repo === repo),
+    })),
   ]
   const present = COMMIT_TYPES.filter((t) => commits.some((c) => commitType(c.subject) === t))
 
-  const labelW = 96
-  const rowH = 26
-  const width = 520
-  const barW = width - labelW - 44
+  const labelW = 190
+  const rowH = 24
+  // True pixel size: the card is full width, and a scaled viewBox would blow the text up.
+  const width = widthOf(container.node(), 480)
+  const barW = width - labelW - 60
   const height = rows.length * rowH + 4
 
   const svg = container
     .append('svg')
     .attr('viewBox', `0 0 ${width} ${height}`)
-    .attr('width', '100%')
+    .attr('width', width)
+    .attr('height', height)
     .attr('role', 'img')
     .attr('aria-label', `Commit types per repository for ${author.name}`)
 
   rows.forEach((row, ri) => {
     const y = ri * rowH + 2
     const byType = d3.group(row.commits, (c) => commitType(c.subject))
+    const rowTotal = d3.sum(row.commits, metricOf)
     svg
       .append('text')
       .attr('x', 0)
@@ -375,7 +368,7 @@ export function drawTypes(container: Container, author: AuthorSummary) {
       .attr('font-size', 12)
       .attr('font-weight', ri === 0 ? 650 : 400)
       .attr('fill', ri === 0 ? 'var(--accent)' : 'var(--ink)')
-      .text(row.label)
+      .text(row.label.length > 22 ? `${row.label.slice(0, 21)}…` : row.label)
     svg
       .append('text')
       .attr('x', width)
@@ -383,14 +376,15 @@ export function drawTypes(container: Container, author: AuthorSummary) {
       .attr('text-anchor', 'end')
       .attr('font-size', 11)
       .attr('fill', 'var(--muted)')
-      .text(num(row.commits.length))
+      .text(d3.format('.3~s')(rowTotal))
 
     let offset = 0
     for (const t of present) {
       const list = byType.get(t) ?? []
-      if (list.length === 0) continue
-      const w = (list.length / row.commits.length) * barW
-      const pct = Math.round((list.length / row.commits.length) * 100)
+      const value = d3.sum(list, metricOf)
+      if (value === 0 || rowTotal === 0) continue
+      const w = (value / rowTotal) * barW
+      const pct = Math.round((value / rowTotal) * 100)
       const examples = list
         .slice(-4)
         .reverse()
@@ -404,7 +398,7 @@ export function drawTypes(container: Container, author: AuthorSummary) {
         .attr('rx', 2)
         .attr('fill', `var(--type-${t})`)
         .on('mousemove', (event: MouseEvent) =>
-          showTip(event, [`${row.label} · ${t}: ${list.length} (${pct}%)`, ...examples].join('\n')),
+          showTip(event, [`${row.label} · ${t}: ${metricText(value)} (${pct}%)`, ...examples].join('\n')),
         )
         .on('mouseleave', hideTip)
       offset += w
@@ -421,24 +415,27 @@ export function drawTypes(container: Container, author: AuthorSummary) {
 export function drawSizes(container: Container, author: AuthorSummary) {
   container.selectAll('*').remove()
   const commits = commitsForAuthor(author).filter((c) => commitType(c.subject) !== 'merge')
-  if (commits.length === 0) return emptyNote(container, 'No commits in this window.')
+  if (commits.length === 0) return emptyNote(container, 'No commits in the selected range.')
+  const repos = activeRepos(commits)
 
   const buckets = SIZE_BUCKETS.map((b) => b.key)
   type Row = { bucket: string } & Record<string, number | string>
   const rows: Row[] = buckets.map((bucket) => {
     const row: Row = { bucket }
-    for (const repo of data.repos) {
-      row[repo] = commits.filter((c) => c.repo === repo && sizeBucket(linesChanged(c)) === bucket).length
-    }
+    for (const repo of repos) row[repo] = 0
     return row
   })
+  for (const c of commits) {
+    const row = rows[buckets.indexOf(sizeBucket(lineCount(c)))]!
+    row[c.repo] = Number(row[c.repo] ?? 0) + metricOf(c)
+  }
   const stacked = d3
     .stack<Row>()
-    .keys(data.repos)
+    .keys(repos)
     .value((d, key) => Number(d[key] ?? 0))(rows)
   const max = Math.max(1, d3.max(stacked[stacked.length - 1] ?? [], (d) => d[1]) ?? 1)
 
-  const margin = { top: 12, right: 12, bottom: 32, left: 32 }
+  const margin = { top: 12, right: 12, bottom: 32, left: 40 }
   const width = 520
   const height = 240
   const innerW = width - margin.left - margin.right
@@ -456,17 +453,26 @@ export function drawSizes(container: Container, author: AuthorSummary) {
     .attr('transform', `translate(0,${innerH})`)
     .call(d3.axisBottom(x).tickFormat((d) => sizeBucketLabel(d as (typeof buckets)[number])))
     .call(styleAxis)
-  g.append('g').call(d3.axisLeft(y).ticks(4)).call(styleAxis)
+  g.append('g')
+    .call(d3.axisLeft(y).ticks(4).tickFormat(d3.format('.3~s')))
+    .call(styleAxis)
 
   const tipFor = (bucket: string) => {
     const inBucket = commits
-      .filter((c) => sizeBucket(linesChanged(c)) === bucket)
-      .sort((a, b) => linesChanged(b) - linesChanged(a))
-    const head = `${sizeBucketLabel(bucket as (typeof buckets)[number])} lines — ${plural(inBucket.length, 'commit')}`
-    const top = inBucket
-      .slice(0, 5)
-      .map((c) => `• ${repoLabel(c.repo)} ${shortHash(c.hash)} +${num(c.added)} −${num(c.deleted)} ${c.subject}`)
-    return [head, ...top].join('\n')
+      .filter((c) => sizeBucket(lineCount(c)) === bucket)
+      .sort((a, b) => lineCount(b) - lineCount(a))
+    const head = `${sizeBucketLabel(bucket as (typeof buckets)[number])} lines — ${plural(inBucket.length, 'commit')}${
+      metric === 'lines' ? ` · ${metricText(d3.sum(inBucket, lineCount))}` : ''
+    }`
+    const top: TipLine[] = inBucket.slice(0, 5).map((c) => ({
+      text: [
+        { text: `${repoLabel(c.repo)} ${shortHash(c.hash)} ` },
+        ...churnParts(c.added, c.deleted),
+        { text: ` ${c.subject}` },
+      ],
+      color: repoColor(c.repo),
+    }))
+    return [{ text: head }, ...top]
   }
 
   const rects = g
@@ -476,7 +482,7 @@ export function drawSizes(container: Container, author: AuthorSummary) {
     .attr('class', 'layer')
     .attr('fill', (d) => repoColor(d.key))
     .selectAll('rect')
-    .data((d) => d)
+    .data((d) => d.filter((p) => p[1] > p[0]))
     .join('rect')
     .attr('x', (d) => x(String(d.data.bucket))!)
     .attr('width', x.bandwidth())
@@ -493,7 +499,12 @@ export function drawSizes(container: Container, author: AuthorSummary) {
       .attr('y', (d) => y(d[1]))
       .attr('height', (d) => Math.max(0, y(d[0]) - y(d[1])))
   }
-  fillRepoLegend(container.append('div').attr('class', 'chart-legend'))
+  d3.select('#sizes-hint').text(
+    metric === 'commits'
+      ? 'Commits per size bucket (lines added + deleted), merges excluded.'
+      : 'Lines changed per size bucket: where the volume comes from. Merges excluded.',
+  )
+  fillRepoLegend(container.append('div').attr('class', 'chart-legend'), repos)
 }
 
 // ---------------------------------------------------------------------------
@@ -509,13 +520,13 @@ export function drawPunchcard(container: Container, author: AuthorSummary) {
   container.selectAll('*').remove()
   const commits = commitsForAuthor(author)
   const counts = d3.range(7).map(() => d3.range(24).map(() => 0))
-  for (const c of commits) counts[weekdayOf(c.day)]![hourFromIso(c.iso)]!++
+  for (const c of commits) counts[weekdayOf(c.day)]![hourFromIso(c.iso)]! += metricOf(c)
   const max = Math.max(1, d3.max(counts.flat()) ?? 1)
 
   const labelW = 40
   const col = 26
   const rowH = 28
-  const totalW = 44
+  const totalW = 52
   const top = 18
   const width = labelW + 24 * col + totalW
   const height = top + 7 * rowH + 4
@@ -529,7 +540,7 @@ export function drawPunchcard(container: Container, author: AuthorSummary) {
     .attr('viewBox', `0 0 ${width} ${height}`)
     .attr('width', '100%')
     .attr('role', 'img')
-    .attr('aria-label', `Commits by weekday and hour for ${author.name}`)
+    .attr('aria-label', `${metricName()} by weekday and hour for ${author.name}`)
 
   for (let h = 0; h < 24; h += 3) {
     svg
@@ -566,11 +577,11 @@ export function drawPunchcard(container: Container, author: AuthorSummary) {
       .attr('text-anchor', 'end')
       .attr('font-size', 11)
       .attr('fill', 'var(--muted)')
-      .text(num(d3.sum(row)))
+      .text(d3.format('.3~s')(d3.sum(row)))
 
     row.forEach((n, h) => {
       if (n === 0) return
-      const tipText = `${WEEKDAYS[wi]} ${String(h).padStart(2, '0')}:00–${String(h).padStart(2, '0')}:59 — ${plural(n, 'commit')}`
+      const tipText = `${WEEKDAYS[wi]} ${String(h).padStart(2, '0')}:00–${String(h).padStart(2, '0')}:59 — ${metricText(n)}`
       const dot = svg
         .append('circle')
         .attr('cx', labelW + h * col + col / 2)
@@ -578,7 +589,6 @@ export function drawPunchcard(container: Container, author: AuthorSummary) {
         .attr('r', r(n))
         .attr('fill', 'var(--clock)')
         .attr('fill-opacity', weekend ? 0.6 : 0.9)
-        .style('filter', 'drop-shadow(0 0 3px var(--workspace-glow))')
         .on('mousemove', (event: MouseEvent) => showTip(event, tipText))
         .on('mouseleave', hideTip)
       if (!prefersReducedMotion()) {
@@ -594,7 +604,7 @@ export function drawPunchcard(container: Container, author: AuthorSummary) {
 }
 
 // ---------------------------------------------------------------------------
-// Hotspots: most-changed files or folders
+// Hotspots: most-changed files or folders (report window only: file lists)
 
 export type HotspotMode = 'files' | 'folders'
 
@@ -610,7 +620,7 @@ function truncateLeft(s: string, max: number): string {
 
 export function drawHotspots(container: Container, author: AuthorSummary, mode: HotspotMode) {
   container.selectAll('*').remove()
-  const commits = commitsForAuthor(author)
+  const commits = windowCommitsForAuthor(author)
   type Spot = { repo: string; path: string; added: number; deleted: number; commits: Set<string> }
   const spots = new Map<string, Spot>()
   for (const c of commits) {
@@ -627,11 +637,11 @@ export function drawHotspots(container: Container, author: AuthorSummary, mode: 
       s.commits.add(c.hash)
     }
   }
-  // Rank by how often a path was touched, then by lines; touches say more about focus than size does.
-  const top = [...spots.values()]
-    .sort((a, b) => b.commits.size - a.commits.size || b.added + b.deleted - (a.added + a.deleted))
-    .slice(0, 15)
-  if (top.length === 0) return emptyNote(container, 'No file changes in this window.')
+  const lines = (s: Spot) => s.added + s.deleted
+  const spotValue = (s: Spot) => (metric === 'commits' ? s.commits.size : lines(s))
+  // Commits: rank by touches, then lines (touches say more about focus than size does).
+  const top = [...spots.values()].sort((a, b) => spotValue(b) - spotValue(a) || lines(b) - lines(a)).slice(0, 15)
+  if (top.length === 0) return emptyNote(container, 'No file changes in the report window.')
 
   const labelW = 300
   const rowH = 22
@@ -639,8 +649,8 @@ export function drawHotspots(container: Container, author: AuthorSummary, mode: 
   const width = 900
   const barW = width - labelW - valueW
   const height = top.length * rowH + 4
-  const maxCommits = d3.max(top, (s) => s.commits.size) ?? 1
-  const x = d3.scaleLinear().domain([0, maxCommits]).range([0, barW])
+  const max = d3.max(top, spotValue) ?? 1
+  const x = d3.scaleLinear().domain([0, max]).range([0, barW])
 
   const svg = container
     .append('svg')
@@ -651,7 +661,10 @@ export function drawHotspots(container: Container, author: AuthorSummary, mode: 
 
   top.forEach((s, i) => {
     const y = i * rowH + 2
-    const tipText = `${repoLabel(s.repo)} · ${s.path}\n${plural(s.commits.size, 'commit')} · +${num(s.added)} −${num(s.deleted)}`
+    const tipText: TipLine[] = [
+      { text: `${repoLabel(s.repo)} · ${s.path}`, color: repoColor(s.repo) },
+      { text: [{ text: `${plural(s.commits.size, 'commit')} · ` }, ...churnParts(s.added, s.deleted)] },
+    ]
     svg
       .append('text')
       .attr('x', labelW - 8)
@@ -672,17 +685,31 @@ export function drawHotspots(container: Container, author: AuthorSummary, mode: 
       .attr('fill', repoColor(s.repo))
       .on('mousemove', (event: MouseEvent) => showTip(event, tipText))
       .on('mouseleave', hideTip)
-    if (prefersReducedMotion()) bar.attr('width', x(s.commits.size))
-    else bar.attr('width', 0).transition().duration(400).attr('width', x(s.commits.size))
-    svg
+    if (prefersReducedMotion()) bar.attr('width', x(spotValue(s)))
+    else
+      bar
+        .attr('width', 0)
+        .transition()
+        .duration(400)
+        .attr('width', x(spotValue(s)))
+    const label = svg
       .append('text')
-      .attr('x', labelW + x(s.commits.size) + 6)
+      .attr('x', labelW + x(spotValue(s)) + 6)
       .attr('y', y + rowH / 2 + 3)
       .attr('font-size', 11)
       .attr('fill', 'var(--muted)')
-      .text(`${s.commits.size} · +${num(s.added)} −${num(s.deleted)}`)
+    label.append('tspan').text(`${s.commits.size} · `)
+    label
+      .append('tspan')
+      .attr('fill', 'var(--added)')
+      .text(`+${num(s.added)}`)
+    label.append('tspan').text(' ')
+    label
+      .append('tspan')
+      .attr('fill', 'var(--deleted)')
+      .text(`−${num(s.deleted)}`)
   })
-  fillRepoLegend(container.append('div').attr('class', 'chart-legend'))
+  fillRepoLegend(container.append('div').attr('class', 'chart-legend'), [...new Set(top.map((s) => s.repo))])
 }
 
 // ---------------------------------------------------------------------------
@@ -704,7 +731,7 @@ export function drawBranches(container: Container, author: AuthorSummary) {
     }))
     .filter((r) => r.mine > 0)
   if (rows.length === 0) {
-    return emptyNote(container, 'No branches with unmerged commits from this author moved in the window.')
+    return emptyNote(container, 'No branches with unmerged commits from this author moved in the report window.')
   }
 
   const table = container.append('table').attr('class', 'compact')
@@ -751,7 +778,7 @@ export function drawBranches(container: Container, author: AuthorSummary) {
 }
 
 // ---------------------------------------------------------------------------
-// Collaboration: ownership share and co-authors on the same files
+// Collaboration: ownership share and co-authors on the same files (report window only)
 
 export function drawCollab(container: Container, author: AuthorSummary) {
   container.selectAll('*').remove()
@@ -764,8 +791,8 @@ export function drawCollab(container: Container, author: AuthorSummary) {
       const mine = repoCommits.filter(isMine)
       if (mine.length === 0) return null
       const myFiles = new Set(mine.flatMap((c) => c.files.map((f) => f.path)))
-      const repoChurn = d3.sum(repoCommits, linesChanged)
-      const myChurn = d3.sum(mine, linesChanged)
+      const repoChurn = d3.sum(repoCommits, lineCount)
+      const myChurn = d3.sum(mine, lineCount)
 
       let sharedMine = 0
       let sharedOthers = 0
@@ -790,7 +817,7 @@ export function drawCollab(container: Container, author: AuthorSummary) {
       }
     })
     .filter((r) => r !== null)
-  if (rows.length === 0) return emptyNote(container, 'No commits from this author in the window.')
+  if (rows.length === 0) return emptyNote(container, 'No commits from this author in the report window.')
 
   const pct = d3.format('.0%')
   const table = container.append('table').attr('class', 'compact')

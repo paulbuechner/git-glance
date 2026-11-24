@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { aggregate } from './aggregate.ts'
+import { personKey } from './commit-kinds.ts'
 import type { Commit, ReportConfig } from './types.ts'
 import { allTimeWindow, customRange } from './window.ts'
 
@@ -8,6 +9,12 @@ const config: ReportConfig = {
   subjectLogins: [],
   collections: [],
   github: false,
+  history: false,
+  theme: null,
+  keepPaths: [],
+  excludeGenerated: false,
+  countBulkDeletions: false,
+  ignoreAuthors: [],
   repos: [
     { name: 'alpha', path: '/tmp/alpha', label: 'alpha' },
     { name: 'beta', path: '/tmp/beta', label: 'beta' },
@@ -151,5 +158,16 @@ describe('aggregate', () => {
     expect(data.workspaceMarks['2026-02']).toBe('empty')
     expect(data.workspaceMarks['2026-03']).toBe('committed')
     expect(data.emptyWeekdays.map((e) => e.day)).toEqual(['2026-02'])
+  })
+})
+
+describe('personKey', () => {
+  test('"Last, First" and "First Last" are one person, across addresses', () => {
+    expect(personKey('Doe, Jane', 'jane.doe@example.com')).toBe(personKey('Jane Doe', 'j.doe@example.org'))
+    expect(personKey('John  Smith', 'a@example.com')).toBe(personKey('john smith', 'b@example.org'))
+  })
+
+  test('generic names stay apart by address', () => {
+    expect(personKey('unknown', 'a@x')).not.toBe(personKey('unknown', 'b@x'))
   })
 })

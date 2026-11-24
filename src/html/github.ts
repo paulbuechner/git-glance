@@ -1,5 +1,5 @@
 import * as d3 from 'd3'
-import { commitsForAuthor, data, repoColor, repoLabel } from './common.ts'
+import { data, repoColor, repoLabel, windowCommitsForAuthor } from './common.ts'
 import { isoInWindow } from '../window.ts'
 import type { AuthorSummary, PullRequestInfo, WorkflowRunInfo } from './common.ts'
 
@@ -251,7 +251,7 @@ export function drawReviews(container: Container, author: AuthorSummary) {
 
 /** Runs that built one of the author's commits, or ran on the head branch of one of their PRs. */
 function runsForAuthor(author: AuthorSummary): WorkflowRunInfo[] {
-  const hashes = new Set(commitsForAuthor(author).map((c) => c.hash))
+  const hashes = new Set(windowCommitsForAuthor(author).map((c) => c.hash))
   const logins = loginsFor(author)
   const branches = new Set(
     (data.github?.prs ?? []).filter((p) => logins.has(p.author)).map((p) => `${p.repo}\t${p.headRef}`),
